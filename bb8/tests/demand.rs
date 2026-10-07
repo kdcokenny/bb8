@@ -6,6 +6,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    task::Context,
     time::Duration,
 };
 use tokio::{
@@ -277,6 +278,30 @@ async fn cancelling_owned_attempt_notifies_an_existing_capacity_waiter() {
     assert!(old.finish.is_closed());
     attempt(&mut rx).await.succeed();
     assert_eq!(waiting.await.unwrap().unwrap().id, 2);
+}
+
+#[tokio::test]
+async fn broken_return_notifies_capacity_waiter_behind_pending_attempt() {
+    let (pool, mut rx, _) = setup(false, 2, 1000, None);
+    let first = start(&pool).await;
+    attempt(&mut rx).await.succeed();
+    let mut broken = first.await.unwrap().unwrap();
+    let waker = futures_util::task::noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    let mut owner = Box::pin(pool.get());
+    assert!(owner.as_mut().poll(&mut cx).is_pending());
+    let pending = attempt(&mut rx).await;
+    let waiting = start(&pool).await;
+
+    broken.broken = true;
+    drop(broken);
+    // The owner consumes the freed-slot wakeup while its attempt is still pending.
+    assert!(owner.as_mut().poll(&mut cx).is_pending());
+    let next = attempt(&mut rx).await;
+    pending.succeed();
+    next.succeed();
+    let _owned = owner.await.unwrap();
+    waiting.await.unwrap().unwrap();
 }
 
 #[tokio::test]

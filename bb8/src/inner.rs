@@ -215,7 +215,8 @@ impl<M: ManageConnection + Send> PoolInner<M> {
 
         let approvals = locked.dropped(1, &self.inner.statics);
         self.spawn_replenishing_approvals(approvals);
-        self.inner.notify.notify_one();
+        // A getter with a pending attempt cannot use the freed slot.
+        self.inner.notify.notify_waiters();
     }
 
     /// Adds an external connection to the pool if there is capacity for it.
